@@ -460,16 +460,126 @@ function App() {
         setTimeout(typeNextChar, baseDelayMs);
       }
 
-      function handleSendMessage() {
+      async function handleSendMessage() {
         const chatInput = document.getElementById('chatInput');
         const message = chatInput.value.trim();
         if (!message) return;
+        
         addMessage(message, 'user');
         chatInput.value = '';
         chatInput.blur();
-        setTimeout(() => {
-          typeBotMessage('This is a demo response. Connect your AI backend here!', 35);
-        }, 500);
+        
+        // Show typing indicator
+        addTypingIndicator();
+        
+        try {
+          // Call streaming API
+          const response = await fetch('http://localhost:3001/chat', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ message }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          removeTypingIndicator();
+
+          // Process the SSE stream
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let fullResponse = '';
+
+          // Create bot message container for streaming
+          hideBotAvatars();
+          const chatMessages = document.getElementById('chatMessages');
+          const messageDiv = document.createElement('div');
+          messageDiv.className = 'message bot';
+          const avatar = document.createElement('div');
+          avatar.className = 'message-avatar';
+          avatar.style.display = 'none';
+          const content = document.createElement('div');
+          content.className = 'message-content';
+          content.textContent = '';
+          messageDiv.appendChild(avatar);
+          messageDiv.appendChild(content);
+          chatMessages.appendChild(messageDiv);
+          chatMessages.scrollTop = chatMessages.scrollHeight;
+
+          // Start pulsing animation
+          if (ringParticles) ringParticles.visible = false;
+          if (!pulseTween && particles) {
+            pulseTween = gsap.to(particles.scale, { x: 1.06, y: 1.06, z: 1.06, duration: 0.8, ease: 'sine.inOut', repeat: -1, yoyo: true });
+          }
+
+          // Read and display stream
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value);
+            const lines = chunk.split('\n');
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const data = line.slice(6);
+                
+                if (data === '[DONE]') {
+                  // Stream complete
+                  if (pulseTween) {
+                    pulseTween.kill();
+                    pulseTween = null;
+                  }
+                  if (currentState === 'sphere' && ringParticles) {
+                    ringParticles.visible = true;
+                  }
+                  break;
+                }
+
+                try {
+                  const parsed = JSON.parse(data);
+                  
+                  if (parsed.error) {
+                    content.textContent = `Error: ${parsed.error}`;
+                    if (pulseTween) {
+                      pulseTween.kill();
+                      pulseTween = null;
+                    }
+                    if (currentState === 'sphere' && ringParticles) {
+                      ringParticles.visible = true;
+                    }
+                    break;
+                  }
+
+                  if (parsed.token) {
+                    fullResponse += parsed.token;
+                    content.textContent = fullResponse;
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                  }
+                } catch (e) {
+                  // Ignore parse errors for incomplete chunks
+                }
+              }
+            }
+          }
+
+          // Clean up pulsing animation
+          if (pulseTween) {
+            pulseTween.kill();
+            pulseTween = null;
+          }
+          if (currentState === 'sphere' && ringParticles) {
+            ringParticles.visible = true;
+          }
+
+        } catch (error) {
+          console.error('Error sending message:', error);
+          removeTypingIndicator();
+          addMessage(`Error: ${error.message}. Make sure the backend server is running on http://localhost:3001`, 'bot');
+        }
       }
 
       // Attach handlers
