@@ -132,9 +132,6 @@ app.post('/chat', async (req, res) => {
 
     console.log('[OLLAMA] Streaming response started');
 
-    // Simple sanitizer to remove unwanted formatting like ** for clean output
-    const cleanToken = (t) => t.replaceAll('**', '');
-
     while (true) {
       // Check if this stream was aborted (new request came in)
       if (controller.signal.aborted) {
@@ -177,7 +174,7 @@ app.post('/chat', async (req, res) => {
 
           // Extract the response token from Ollama
           if (jsonResponse.response) {
-            const token = cleanToken(jsonResponse.response);
+            const token = jsonResponse.response;
             // Only send if we're still the active stream
             if (activeStream.controller === controller) {
               res.write(`data: ${JSON.stringify({ token })}\n\n`);

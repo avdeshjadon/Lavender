@@ -1,6 +1,9 @@
 import React, { useEffect } from 'react'
 import * as THREE from 'three'
 import { gsap } from 'gsap'
+import { marked } from 'marked'
+import hljs from 'highlight.js'
+import 'highlight.js/styles/github-dark.css'
 
 function App() {
   useEffect(() => {
@@ -348,15 +351,78 @@ function App() {
       const sendBtn = document.getElementById('sendBtn');
       const chatInput = document.getElementById('chatInput');
 
+      // Configure marked for better markdown rendering
+      marked.setOptions({
+        breaks: true,
+        gfm: true,
+        highlight: function(code, lang) {
+          if (lang && hljs.getLanguage(lang)) {
+            try {
+              return hljs.highlight(code, { language: lang }).value;
+            } catch (err) {}
+          }
+          return hljs.highlightAuto(code).value;
+        }
+      });
+
+      // Function to render markdown with copy buttons for code blocks
+      function renderMarkdown(text) {
+        const html = marked.parse(text);
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        
+        // Add copy buttons to all code blocks
+        const codeBlocks = tempDiv.querySelectorAll('pre code');
+        codeBlocks.forEach((block) => {
+          const pre = block.parentElement;
+          pre.style.position = 'relative';
+          
+          const copyBtn = document.createElement('button');
+          copyBtn.className = 'copy-code-btn';
+          copyBtn.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          `;
+          copyBtn.title = 'Copy code';
+          
+          copyBtn.addEventListener('click', () => {
+            const code = block.textContent;
+            navigator.clipboard.writeText(code).then(() => {
+              copyBtn.innerHTML = `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+              `;
+              setTimeout(() => {
+                copyBtn.innerHTML = `
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                `;
+              }, 2000);
+            });
+          });
+          
+          pre.appendChild(copyBtn);
+        });
+        
+        return tempDiv.innerHTML;
+      }
+
       function addMessage(text, type) {
         const chatMessages = document.getElementById('chatMessages');
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${type}`;
         const content = document.createElement('div');
         content.className = 'message-content';
-        content.textContent = text;
         if (type === 'bot') {
+          content.innerHTML = renderMarkdown(text);
           hideBotAvatars();
+        } else {
+          content.textContent = text;
         }
         messageDiv.appendChild(content);
         chatMessages.appendChild(messageDiv);
@@ -556,7 +622,7 @@ function App() {
 
                   if (parsed.token) {
                     fullResponse += parsed.token;
-                    content.textContent = fullResponse;
+                    content.innerHTML = renderMarkdown(fullResponse);
                     chatMessages.scrollTop = chatMessages.scrollHeight;
                   }
                 } catch (e) {
@@ -586,7 +652,7 @@ function App() {
       if (getStartedBtn) {
         const onGetStarted = () => {
           getStartedContainer.classList.add('hidden');
-          morphToText('Avdesh');
+          morphToText('Lavender');
           isNameDisplayed = true;
           setTimeout(() => {
             morphToCircle();
@@ -599,7 +665,7 @@ function App() {
             const chatInputEl = document.getElementById('chatInput');
             chatInputEl.placeholder = 'Type your message...';
             chatInputEl.focus();
-            typeBotMessage("Hello! I'm AVDESH AI. How can I help you today?", 40);
+            typeBotMessage("Hello! I'm Lavender's AI. How can I help you today?", 40);
             isFirstMessage = false;
           }, 3000);
         };
