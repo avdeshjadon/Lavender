@@ -8,6 +8,12 @@ const PORT = process.env.PORT || 3001;
 const OLLAMA_API_URL = 'http://localhost:11434';
 const MODEL_NAME = 'llama3.1:8b';
 
+// Track the currently active streaming request to allow cancellation
+let activeStream = {
+  controller: null,
+  res: null,
+};
+
 // ============================================
 // MIDDLEWARE
 // ============================================
@@ -61,10 +67,35 @@ app.post('/chat', async (req, res) => {
   console.log(`[CHAT] Received message: "${message.substring(0, 50)}..."`);
 
   try {
+    // If there is an active stream, abort it before starting a new one
+    if (activeStream.controller) {
+      console.log('[STREAM] Aborting previous stream for new request');
+      try {
+        activeStream.controller.abort();
+        if (activeStream.res && !activeStream.res.writableEnded) {
+          activeStream.res.write('data: [DONE]\n\n');
+          activeStream.res.end();
+        }
+      } catch (abortErr) {
+        console.warn('[STREAM] Error during abort:', abortErr.message);
+      }
+    }
+
+    // Clear active stream before starting new one
+    activeStream.controller = null;
+    activeStream.res = null;
+
     // Set headers for Server-Sent Events (SSE)
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+
+    // Create an AbortController for this streaming request
+    const controller = new AbortController();
+
+    // Mark this as the currently active stream IMMEDIATELY
+    activeStream.controller = controller;
+    activeStream.res = res;
 
     // Prepare request to Ollama API
     const ollamaPayload = {
@@ -82,6 +113,7 @@ app.post('/chat', async (req, res) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(ollamaPayload),
+      signal: controller.signal,
     });
 
     // Check if Ollama API responded successfully
@@ -100,14 +132,27 @@ app.post('/chat', async (req, res) => {
 
     console.log('[OLLAMA] Streaming response started');
 
+    // Simple sanitizer to remove unwanted formatting like ** for clean output
+    const cleanToken = (t) => t.replaceAll('**', '');
+
     while (true) {
+      // Check if this stream was aborted (new request came in)
+      if (controller.signal.aborted) {
+        console.log('[STREAM] Stream aborted by new request');
+        break;
+      }
+
       const { done, value } = await reader.read();
 
       if (done) {
         console.log('[OLLAMA] Stream completed');
-        // Send final event to indicate completion
-        res.write('data: [DONE]\n\n');
-        res.end();
+        // Only send DONE if we're still the active stream
+        if (activeStream.controller === controller) {
+          res.write('data: [DONE]\n\n');
+          res.end();
+          activeStream.controller = null;
+          activeStream.res = null;
+        }
         break;
       }
 
@@ -121,15 +166,22 @@ app.post('/chat', async (req, res) => {
       for (const line of lines) {
         if (line.trim() === '') continue;
 
+        // Check again if aborted during processing
+        if (controller.signal.aborted) {
+          console.log('[STREAM] Stream aborted during line processing');
+          break;
+        }
+
         try {
           const jsonResponse = JSON.parse(line);
 
           // Extract the response token from Ollama
           if (jsonResponse.response) {
-            const token = jsonResponse.response;
-            
-            // Send token to frontend via SSE
-            res.write(`data: ${JSON.stringify({ token })}\n\n`);
+            const token = cleanToken(jsonResponse.response);
+            // Only send if we're still the active stream
+            if (activeStream.controller === controller) {
+              res.write(`data: ${JSON.stringify({ token })}\n\n`);
+            }
           }
 
           // Check if this is the final response
@@ -138,21 +190,45 @@ app.post('/chat', async (req, res) => {
             console.log(`[STATS] Total duration: ${jsonResponse.total_duration}ns`);
           }
         } catch (parseError) {
+          // If aborted, stop immediately
+          if (controller.signal.aborted) {
+            console.log('[STREAM] Parse stopped due to abort');
+            break;
+          }
           console.error('[ERROR] Failed to parse Ollama response:', parseError);
           // Continue processing other lines
         }
       }
+
+      // Check if aborted after processing lines
+      if (controller.signal.aborted) {
+        break;
+      }
     }
 
   } catch (error) {
+    // If this was an abort, don't log as error
+    if (error.name === 'AbortError') {
+      console.log('[STREAM] Request aborted for new chat');
+      return;
+    }
+
     console.error('[ERROR] Chat endpoint error:', error.message);
     
-    // Send error event to client
-    res.write(`data: ${JSON.stringify({ 
-      error: 'Failed to generate response',
-      details: error.message 
-    })}\n\n`);
-    res.end();
+    // Only send error if we're still the active stream
+    if (activeStream.controller && activeStream.res === res) {
+      res.write(`data: ${JSON.stringify({ 
+        error: 'Failed to generate response',
+        details: error.message 
+      })}\n\n`);
+      res.end();
+    }
+  } finally {
+    // Clean up if this was the active stream
+    if (activeStream.res === res) {
+      activeStream.controller = null;
+      activeStream.res = null;
+    }
   }
 });
 
